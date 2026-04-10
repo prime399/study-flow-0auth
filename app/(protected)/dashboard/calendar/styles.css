@@ -1,0 +1,210 @@
+.calendar {
+  @apply h-full;
+}
+
+.rbc-calendar {
+  @apply font-sans;
+}
+
+.rbc-toolbar {
+  @apply mb-4;
+}
+
+.rbc-toolbar button {
+  @apply rounded-md border bg-background px-3 py-1 text-sm font-medium hover:bg-accent hover:text-accent-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2;
+}
+
+.rbc-toolbar button.rbc-active {
+  @apply bg-primary text-primary-foreground;
+}
+
+.rbc-header {
+  @apply border-border bg-muted/50 py-2 font-medium;
+}
+
+.rbc-today {
+  @apply bg-accent/50;
+}
+
+.rbc-off-range-bg {
+  @apply bg-muted/25;
+}
+
+.rbc-event {
+  @apply cursor-pointer;
+}
+
+/* Time view event styling to prevent overflow */
+.rbc-time-view .rbc-event {
+  @apply text-xs leading-tight;
+  max-height: calc(100% - 2px);
+  min-height: 18px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  line-height: 1.1;
+  padding: 1px 4px;
+}
+
+.rbc-time-view .rbc-event-content {
+  @apply text-xs leading-tight;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+/* Adjust time slot height for better event fitting */
+.rbc-time-slot {
+  min-height: 20px;
+}
+
+.rbc-day-slot .rbc-time-slot {
+  @apply border-border/50;
+  min-height: 20px;
+}
+
+/* Event positioning and overflow control */
+.rbc-time-view .rbc-events-container {
+  margin-right: 10px;
+}
+
+.rbc-time-view .rbc-event {
+  margin: 1px 2px;
+  box-sizing: border-box;
+}
+
+/* Week and Day view specific adjustments */
+.rbc-time-view .rbc-day-slot {
+  position: relative;
+}
+
+.rbc-time-view .rbc-event-label {
+  @apply text-xs;
+  font-size: 10px;
+  line-height: 1.1;
+  padding: 0;
+  margin: 0;
+}
+
+/* Ensure events don't overflow their containers */
+.rbc-addons-dnd .rbc-event,
+.rbc-time-view .rbc-event {
+  position: absolute;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+/* Time grid improvements */
+.rbc-time-content {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.rbc-time-view .rbc-allday-cell {
+  flex-shrink: 0;
+}
+
+.rbc-show-more {
+  @apply bg-background text-foreground border border-border rounded-md px-2 py-1 text-sm font-medium hover:bg-accent hover:text-accent-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 cursor-pointer;
+}
+
+.rbc-month-view,
+.rbc-time-view,
+.rbc-agenda-view {
+  @apply border-border;
+}
+
+.rbc-time-header-content,
+.rbc-header {
+  @apply border-border;
+}
+
+.rbc-time-content {
+  @apply border-border;
+}
+
+.rbc-day-slot .rbc-time-slot {
+  @apply border-border/50;
+}
+
+/* Popup overlay styling for +more button */
+.rbc-overlay {
+  @apply bg-popover text-popover-foreground border border-border rounded-lg shadow-lg p-2 z-50;
+}
+
+.rbc-overlay-header {
+  @apply bg-muted text-muted-foreground p-2 font-medium text-sm border-b border-border;
+}
+
+/* Event list in popup */
+.rbc-event-list {
+  @apply bg-popover;
+}
+
+.rbc-event-list .rbc-event {
+  @apply bg-background hover:bg-accent text-foreground hover:text-accent-foreground border-b border-border/50 last:border-b-0 p-2 transition-colors;
+}
+
+/* Calendar cell styling */
+.rbc-date-cell {
+  @apply text-foreground;
+}
+
+.rbc-date-cell.rbc-off-range {
+  @apply text-muted-foreground;
+}
+
+.rbc-button-link {
+  @apply text-foreground hover:text-accent-foreground hover:bg-accent rounded transition-colors;
+}
+
+/* Month view date numbers */
+.rbc-date-cell > a,
+.rbc-date-cell > span {
+  @apply text-foreground hover:bg-accent hover:text-accent-foreground rounded px-2 py-1 transition-colors;
+}
+
+/* Week and day view time slots */
+.rbc-time-slot {
+  @apply text-muted-foreground;
+}
+
+/* All day event area */
+.rbc-allday-cell {
+  @apply bg-muted/25 border-border;
+}
+
+/* Calendar navigation arrows and buttons */
+.rbc-btn-group button {
+  @apply text-foreground bg-background border-border hover:bg-accent hover:text-accent-foreground;
+}
+
+/* Selected date highlighting */
+.rbc-selected {
+  @apply bg-primary text-primary-foreground;
+}
+
+/* Current time indicator */
+.rbc-current-time-indicator {
+  @apply bg-primary;
+}
+
+/* Agenda view styling */
+.rbc-agenda-table {
+  @apply bg-background text-foreground;
+}
+
+.rbc-agenda-table tbody > tr > td {
+  @apply border-border;
+}
+
+.rbc-agenda-date-cell,
+.rbc-agenda-time-cell {
+  @apply bg-muted/25 text-foreground;
+}
+
+.rbc-agenda-event-cell {
+  @apply bg-background text-foreground;
+}
