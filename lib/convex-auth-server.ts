@@ -32,7 +32,8 @@ export async function getAuthenticatedConvexClient(
     throw new Error('NEXT_PUBLIC_CONVEX_URL not configured');
   }
 
-  const client = new ConvexHttpClient(convexUrl);
+  const normalizedConvexUrl = convexUrl.replace(/\/+$/, '');
+  const client = new ConvexHttpClient(normalizedConvexUrl);
   client.setAuth(convexAuthToken);
   return client;
 }

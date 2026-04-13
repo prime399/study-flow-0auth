@@ -26,7 +26,6 @@ import type * as onboarding from "../onboarding.js";
 import type * as scheduling from "../scheduling.js";
 import type * as spotify from "../spotify.js";
 import type * as study from "../study.js";
-import type * as testHelpers from "../testHelpers.js";
 import type * as todos from "../todos.js";
 import type * as userApiKeys from "../userApiKeys.js";
 import type * as users from "../users.js";
@@ -53,7 +52,6 @@ declare const fullApi: ApiFromModules<{
   scheduling: typeof scheduling;
   spotify: typeof spotify;
   study: typeof study;
-  testHelpers: typeof testHelpers;
   todos: typeof todos;
   userApiKeys: typeof userApiKeys;
   users: typeof users;
