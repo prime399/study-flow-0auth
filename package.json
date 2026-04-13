@@ -9,7 +9,8 @@
     "predev": "convex dev --until-success && node setup.mjs --once && convex dashboard --no-open",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit --pretty false --incremental false"
   },
   "dependencies": {
     "@ai-sdk/openai": "^1.3.24",

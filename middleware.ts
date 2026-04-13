@@ -39,7 +39,7 @@ const convexMiddleware = convexAuthNextjsMiddleware(async (request, { convexAuth
   if (isSignInPage(request) && await convexAuth.isAuthenticated()) {
     return nextjsMiddlewareRedirect(request, "/dashboard")
   }
-  if (isProtectedRoute(request) && !convexAuth.isAuthenticated()) {
+  if (isProtectedRoute(request) && !(await convexAuth.isAuthenticated())) {
     return nextjsMiddlewareRedirect(request, "/signin")
   }
 
