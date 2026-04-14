@@ -9,7 +9,7 @@ import { sanitizeMessages } from "./_lib/message-sanitizer"
 import {
   validateOpenAIConfig,
   createOpenAIClient,
-  DEFAULT_COMPLETION_OPTIONS,
+  getDefaultCompletionOptions,
   fetchChatCompletion,
   type ChatCompletionOptions,
 } from "./_lib/openai-client"
@@ -279,7 +279,7 @@ ${toolsList}`
       const completionOptions: ChatCompletionOptions = {
         model: config.herokuModelId,
         messages: chatMessages,
-        ...DEFAULT_COMPLETION_OPTIONS,
+        ...getDefaultCompletionOptions(config.herokuModelId),
       }
 
       completion = await fetchChatCompletion(client, completionOptions)

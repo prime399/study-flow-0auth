@@ -70,6 +70,7 @@ export default function AIHelperPage() {
             disabled={isLoading}
           />
           <McpToolSelector
+            key={selectedModel} // Reset tool selection when model changes
             selectedTool={selectedMcpTool}
             onToolChange={setSelectedMcpTool}
             disabled={isLoading}

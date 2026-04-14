@@ -12,7 +12,7 @@ import { executeWithRegistry } from './tool-executors'
 import {
   createOpenAIClient,
   fetchChatCompletion,
-  DEFAULT_COMPLETION_OPTIONS,
+  getDefaultCompletionOptions,
   type OpenAIConfig,
   type ChatCompletionOptions,
 } from './openai-client'
@@ -137,7 +137,7 @@ export async function runToolLoop(
     const options: ChatCompletionOptions = {
       model: config.herokuModelId,
       messages: conversationMessages,
-      ...DEFAULT_COMPLETION_OPTIONS,
+      ...getDefaultCompletionOptions(config.herokuModelId),
       tools: openaiTools.length > 0 ? openaiTools : undefined,
     }
 
@@ -219,7 +219,7 @@ export async function runToolLoop(
   const finalCompletion = await fetchChatCompletion(client, {
     model: config.herokuModelId,
     messages: conversationMessages,
-    ...DEFAULT_COMPLETION_OPTIONS,
+    ...getDefaultCompletionOptions(config.herokuModelId),
   })
 
   return finalCompletion

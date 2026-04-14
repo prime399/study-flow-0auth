@@ -130,11 +130,29 @@ export interface ChatCompletionOptions {
   tool_choice?: OpenAI.Chat.Completions.ChatCompletionToolChoiceOption
 }
 
-export const DEFAULT_COMPLETION_OPTIONS = {
+// Claude on Heroku rejects top_p + temperature together, and max_tokens > 4096.
+const CLAUDE_COMPLETION_OPTIONS = {
+  temperature: 0.7,
+  max_tokens: 4096,
+} as const
+
+const STANDARD_COMPLETION_OPTIONS = {
   temperature: 0.7,
   top_p: 0.95,
   max_tokens: 64000,
 } as const
+
+export function getDefaultCompletionOptions(
+  modelId: string
+): { temperature: number; top_p?: number; max_tokens: number } {
+  if (modelId.startsWith("claude")) {
+    return { ...CLAUDE_COMPLETION_OPTIONS }
+  }
+  return { ...STANDARD_COMPLETION_OPTIONS }
+}
+
+// Legacy constant — prefer getDefaultCompletionOptions(modelId) for new code
+export const DEFAULT_COMPLETION_OPTIONS = STANDARD_COMPLETION_OPTIONS
 
 const STREAM_REQUIRED_MODELS: ReadonlySet<SupportedModelId> = new Set([
   "gpt-oss-120b",
