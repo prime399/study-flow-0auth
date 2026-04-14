@@ -15,18 +15,12 @@ import {
 } from "./_lib/openai-client"
 import { processAIResponse } from "./_lib/response-processor"
 import { resolveModelRouting } from "./_lib/model-router"
-import { injectUserTokensToMCP } from "@/lib/mcp-token-injector"
 import { getAIConfig, isBYOKConfig, recordBYOKUsage } from "./_lib/byok-helper"
-import { createProvider } from "./_lib/providers/factory"
 import { isTokenVaultError, formatTokenVaultError } from "@/lib/auth0-token-vault"
-
-interface McpTool {
-  id: string
-  name: string
-  namespace: string
-  description: string
-  inputSchema?: any
-}
+import type { McpTool } from "./_lib/mcp-types"
+import { isCalendarTool } from "./_lib/mcp-types"
+import { configureCalendarExecutor, configureHerokuExecutor } from "./_lib/tool-executors"
+import { runToolLoop } from "./_lib/tool-loop"
 
 async function fetchAvailableMcpTools(requestUrl?: string): Promise<McpTool[]> {
   try {
@@ -38,8 +32,8 @@ async function fetchAvailableMcpTools(requestUrl?: string): Promise<McpTool[]> {
     }
     
     const baseUrl = requestUrl || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
-    // Fetch all Heroku-registered MCP tools (including Google Calendar MCP addon)
-    const response = await fetch(`${baseUrl}/api/ai-helper/mcp-servers`, {
+    // Fetch all Heroku-registered MCP tools (including local Google Calendar MCP)
+    const response = await fetch(`${baseUrl}/api/ai-helper/mcp-servers-local`, {
       cache: 'no-store'
     })
     
@@ -53,138 +47,6 @@ async function fetchAvailableMcpTools(requestUrl?: string): Promise<McpTool[]> {
   } catch (error) {
     console.warn('Error fetching MCP tools:', error)
     return []
-  }
-}
-
-async function callHerokuAgentsEndpoint(
-  config: { herokuBaseUrl: string; herokuApiKey: string; herokuModelId: string },
-  messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[],
-  mcpTools: McpTool[],
-  retryCount = 0
-): Promise<any> {
-  const agentsUrl = `${config.herokuBaseUrl.replace(/\/$/, "")}/v1/agents/heroku`
-  const MAX_RETRIES = 2
-
-  // Filter out tools with missing IDs and deduplicate
-  const validTools = mcpTools.filter(tool => {
-    if (!tool.id || typeof tool.id !== 'string') {
-      console.warn(`[AI Helper] Skipping tool with missing or invalid id:`, tool)
-      return false
-    }
-    return true
-  })
-
-  const uniqueTools = validTools.reduce((acc, tool) => {
-    if (!acc.find(t => t.id === tool.id)) {
-      acc.push(tool)
-    }
-    return acc
-  }, [] as McpTool[])
-
-  // Log filtering and deduplication stats
-  if (mcpTools.length !== validTools.length) {
-    console.log(`[AI Helper] Filtered ${mcpTools.length - validTools.length} invalid tools`)
-  }
-  if (validTools.length !== uniqueTools.length) {
-    console.log(`[AI Helper] Deduplicated ${validTools.length} tools to ${uniqueTools.length} unique tools`)
-  }
-
-  const toolsArray = uniqueTools.map(tool => ({
-    type: "mcp",
-    name: tool.id,
-  }))
-
-  const requestBody: any = {
-    model: config.herokuModelId,
-    messages,
-    tools: toolsArray,
-  }
-
-  console.log(`[AI Helper] Request body tools:`, JSON.stringify(toolsArray, null, 2))
-
-  console.log(`[AI Helper] Calling Heroku Agents API with ${toolsArray.length} tools (attempt ${retryCount + 1}/${MAX_RETRIES + 1})`)
-
-  try {
-    const response = await fetch(agentsUrl, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${config.herokuApiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(requestBody),
-    })
-
-    if (!response.ok) {
-      const errorText = await response.text()
-
-      // Retry on 503 (Service Unavailable) errors
-      if (response.status === 503 && retryCount < MAX_RETRIES) {
-        const delay = Math.min(1000 * Math.pow(2, retryCount), 5000) // Exponential backoff: 1s, 2s, 5s
-        console.warn(`[AI Helper] Got 503 error, retrying in ${delay}ms... (attempt ${retryCount + 1}/${MAX_RETRIES})`)
-        await new Promise(resolve => setTimeout(resolve, delay))
-        return callHerokuAgentsEndpoint(config, messages, mcpTools, retryCount + 1)
-      }
-
-      throw new Error(`Heroku Agents API error (${response.status}): ${errorText}`)
-    }
-
-    // Parse SSE response
-    const text = await response.text()
-    const lines = text.split('\n')
-    let lastCompletion: any = null
-    let toolCalls: any[] = []
-
-    for (const line of lines) {
-      if (line.startsWith('data:')) {
-        const data = line.slice(5).trim()
-        if (data === '[DONE]') break
-
-        try {
-          const parsed = JSON.parse(data)
-
-          // Log all SSE events for debugging
-          if (parsed.object) {
-            console.log(`[AI Helper] SSE event:`, JSON.stringify(parsed, null, 2))
-          }
-
-          // Log tool invocations for debugging
-          if (parsed.object === 'tool.completion') {
-            const toolName = parsed.choices?.[0]?.message?.name || parsed.tool?.name || parsed.name || 'unknown'
-            const toolContent = parsed.choices?.[0]?.message?.content || ''
-            console.log(`[AI Helper] Tool invoked: ${toolName}`)
-            console.log(`[AI Helper] Tool result:`, toolContent.substring(0, 500))
-            toolCalls.push(parsed)
-          }
-
-          // Collect chat completions (including tool calls and responses)
-          if (parsed.object === 'chat.completion' || parsed.object === 'tool.completion') {
-            lastCompletion = parsed
-          }
-        } catch (e) {
-          // Skip invalid JSON lines
-        }
-      }
-    }
-
-    if (toolCalls.length > 0) {
-      console.log(`[AI Helper] Total tools invoked: ${toolCalls.length}`)
-    }
-
-    if (!lastCompletion) {
-      throw new Error("No valid completion received from Heroku Agents API")
-    }
-
-    return lastCompletion
-  } catch (error) {
-    // Retry on network errors
-    if (retryCount < MAX_RETRIES && error instanceof Error &&
-        (error.message.includes('fetch') || error.message.includes('ECONNRESET'))) {
-      const delay = Math.min(1000 * Math.pow(2, retryCount), 5000)
-      console.warn(`[AI Helper] Network error, retrying in ${delay}ms...`, error.message)
-      await new Promise(resolve => setTimeout(resolve, delay))
-      return callHerokuAgentsEndpoint(config, messages, mcpTools, retryCount + 1)
-    }
-    throw error
   }
 }
 
@@ -267,39 +129,34 @@ export async function POST(req: Request) {
       }
     }
 
-    // ===== GOOGLE CALENDAR MCP TOKEN INJECTION =====
-    // If Google Calendar MCP tools are available and user is authenticated, inject tokens
-    // Calendar tools can be under different namespaces: 'mcp', 'google-calendar', 'google-calendar-local'
-    const calendarToolNames = ['list-calendars', 'list-events', 'create-event', 'update-event',
-                                'delete-event', 'get-event', 'search-events', 'get-freebusy',
-                                'list-colors', 'get-current-time']
-    const hasGoogleCalendarTools = availableMcpTools.some(
-      tool => tool.namespace === 'mcp' ||
-              tool.namespace === 'google-calendar' ||
-              tool.namespace === 'google-calendar-local' ||
-              calendarToolNames.includes(tool.name)
-    )
+    // ===== CONFIGURE TOOL EXECUTORS =====
+    const hasGoogleCalendarTools = availableMcpTools.some(isCalendarTool)
 
     if (hasGoogleCalendarTools && userId && convexAuthToken) {
-      try {
-        console.log(`[AI Helper] Injecting Google Calendar tokens for user: ${userId}`)
-        const injectionResult = await injectUserTokensToMCP(userId, convexAuthToken)
-
-        if (!injectionResult.success) {
-          console.warn(`[AI Helper] Token injection failed: ${injectionResult.message}`)
-          // Don't fail the request, but log the warning
-          // The user will get an error when they try to use calendar tools
-        } else {
-          console.log(`[AI Helper] Tokens injected successfully. Expires in: ${injectionResult.expiresIn}ms`)
-        }
-      } catch (error) {
-        console.error('[AI Helper] Error during token injection:', error)
-        // Continue with the request even if token injection fails
-        // The calendar tools will return appropriate errors if tokens are missing
-      }
+      configureCalendarExecutor({ userId, convexAuthToken })
+      console.log(`[AI Helper] Calendar executor configured for user: ${userId}`)
     } else if (hasGoogleCalendarTools && !userId) {
       console.log('[AI Helper] Google Calendar tools available but user not authenticated - calendar tools will not work')
     }
+
+    configureHerokuExecutor({
+      herokuBaseUrl: config.herokuBaseUrl,
+      herokuApiKey: config.herokuApiKey,
+      herokuModelId: config.herokuModelId,
+    })
+
+    // Deduplicate tools: prefer local calendar tools over Heroku ones
+    const localCalendarNames = new Set(
+      availableMcpTools
+        .filter(t => t.namespace === 'google-calendar-local')
+        .map(t => t.name)
+    )
+    availableMcpTools = availableMcpTools.filter(t => {
+      if (t.namespace !== 'google-calendar-local' && localCalendarNames.has(t.name)) {
+        return false
+      }
+      return true
+    })
 
     // Build system prompt with user context
     const baseSystemPrompt = buildSystemPrompt({ userName, studyStats, groupInfo })
@@ -411,14 +268,10 @@ ${toolsList}`
 
     let completion: OpenAI.Chat.Completions.ChatCompletion
 
-    // Use Heroku Agents endpoint with all registered MCP tools
+    // Use tool loop with executor registry for MCP tools
     if (availableMcpTools.length > 0) {
-      console.log(`[AI Helper] Using ${availableMcpTools.length} Heroku-registered MCP tools`)
-      completion = await callHerokuAgentsEndpoint(
-        config,
-        chatMessages,
-        availableMcpTools
-      )
+      console.log(`[AI Helper] Using tool loop with ${availableMcpTools.length} MCP tools`)
+      completion = await runToolLoop(config, chatMessages, availableMcpTools)
     } else {
       // Fall back to standard OpenAI client if no MCP tools available
       const client = createOpenAIClient(config)

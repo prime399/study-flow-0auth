@@ -25,7 +25,7 @@ export function McpToolSelector({ selectedTool, onToolChange, disabled = false }
   useEffect(() => {
     async function fetchMcpTools() {
       try {
-        const response = await fetch("/api/ai-helper/mcp-servers")
+        const response = await fetch("/api/ai-helper/mcp-servers-local")
         if (!response.ok) {
           throw new Error("Failed to fetch MCP tools")
         }
