@@ -3,25 +3,10 @@
  * This version supports both Heroku-hosted MCP servers and local MCP server
  */
 
+import type { McpTool, McpServer } from '../_lib/mcp-types'
+
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
-
-interface McpTool {
-  id: string
-  name: string
-  namespace: string
-  description: string
-  inputSchema?: any
-}
-
-interface McpServer {
-  namespace: string
-  name: string
-  version: string
-  tools: McpTool[]
-  isLocal?: boolean
-  baseUrl?: string
-}
 
 /**
  * Get local Google Calendar MCP tools
