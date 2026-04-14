@@ -147,7 +147,29 @@ export async function runToolLoop(
       delete options.tool_choice
     }
 
-    const completion = await fetchChatCompletion(client, options)
+    let completion: OpenAI.Chat.Completions.ChatCompletion
+    try {
+      completion = await fetchChatCompletion(client, options)
+    } catch (error) {
+      // If the model doesn't support tools (400), fall back to no-tools
+      if (
+        iteration === 0 &&
+        options.tools &&
+        error instanceof Error &&
+        'status' in error &&
+        (error as { status: number }).status === 400
+      ) {
+        console.warn(
+          `[ToolLoop] Model ${config.herokuModelId} rejected tools param, falling back to no-tools completion`
+        )
+        delete options.tools
+        delete options.tool_choice
+        completion = await fetchChatCompletion(client, options)
+        return completion
+      }
+      throw error
+    }
+
     const choice = completion.choices[0]
 
     if (!choice) {
