@@ -1,8 +1,6 @@
 import { api } from "@/convex/_generated/api";
 import { ConvexHttpClient } from "convex/browser";
 
-const convex = new ConvexHttpClient(process.env.NEXT_PUBLIC_CONVEX_URL!);
-
 export interface SpotifyTokenData {
   accessToken: string;
   refreshToken: string;
@@ -180,7 +178,8 @@ export async function searchSpotifyPlaylistsDirect(
     );
 
     if (!response.ok) {
-      throw new Error(`Spotify API error: ${response.statusText}`);
+      const body = await response.json().catch(() => ({}))
+      throw new Error(`Spotify API error: ${response.status} ${response.statusText} - ${JSON.stringify(body)}`)
     }
 
     const data = await response.json();
@@ -209,7 +208,8 @@ export async function getUserPlaylistsDirect(
     );
 
     if (!response.ok) {
-      throw new Error(`Spotify API error: ${response.statusText}`);
+      const body = await response.json().catch(() => ({}))
+      throw new Error(`Spotify API error: ${response.status} ${response.statusText} - ${JSON.stringify(body)}`)
     }
 
     const data = await response.json();
@@ -234,7 +234,8 @@ export async function getCurrentUserProfileDirect(
     });
 
     if (!response.ok) {
-      throw new Error(`Spotify API error: ${response.statusText}`);
+      const body = await response.json().catch(() => ({}))
+      throw new Error(`Spotify API error: ${response.status} ${response.statusText} - ${JSON.stringify(body)}`)
     }
 
     return await response.json();
