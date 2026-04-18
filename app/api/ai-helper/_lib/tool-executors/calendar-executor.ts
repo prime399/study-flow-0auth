@@ -17,6 +17,8 @@ export function configureCalendarExecutor(config: {
   calendarConfig = config
 }
 
+let jsonRpcId = 0
+
 async function invokeGoogleCalendarTool(
   toolName: string,
   args: Record<string, unknown>
@@ -32,10 +34,16 @@ async function invokeGoogleCalendarTool(
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      'Accept': 'application/json, text/event-stream',
       'X-API-Key': mcpApiKey,
       'Origin': process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000',
     },
-    body: JSON.stringify({ name: toolName, arguments: args }),
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'tools/call',
+      params: { name: toolName, arguments: args },
+      id: ++jsonRpcId,
+    }),
   })
 
   if (!response.ok) {
@@ -45,7 +53,22 @@ async function invokeGoogleCalendarTool(
     )
   }
 
-  return response.json()
+  // MCP server returns SSE format: "event: message\ndata: {...}"
+  const raw = await response.text()
+  const dataLine = raw
+    .split('\n')
+    .find((line) => line.startsWith('data: '))
+  if (!dataLine) {
+    throw new Error(`Unexpected MCP response format: ${raw.slice(0, 200)}`)
+  }
+
+  const parsed = JSON.parse(dataLine.slice(6))
+  if (parsed.error) {
+    throw new Error(
+      parsed.error.message || JSON.stringify(parsed.error)
+    )
+  }
+  return parsed.result
 }
 
 async function execute(

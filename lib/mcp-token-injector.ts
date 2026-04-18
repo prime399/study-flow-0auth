@@ -19,6 +19,10 @@ interface TokenInjectionResult {
   warning?: string;
 }
 
+// Cache injection results for 60s to avoid rate-limiting on multi-tool-call requests
+const injectionCache = new Map<string, { result: TokenInjectionResult; expiresAt: number }>()
+const INJECTION_CACHE_TTL_MS = 60_000
+
 interface MCPServerConfig {
   url: string;
   apiKey: string;
@@ -63,6 +67,22 @@ function decryptToken(encryptedToken: string): string {
  * @returns Promise<TokenInjectionResult>
  */
 export async function injectUserTokensToMCP(
+  userId: string,
+  convexAuthToken: string
+): Promise<TokenInjectionResult> {
+  const cached = injectionCache.get(userId)
+  if (cached && Date.now() < cached.expiresAt) {
+    return cached.result
+  }
+
+  const result = await _injectUserTokensToMCP(userId, convexAuthToken)
+  if (result.success) {
+    injectionCache.set(userId, { result, expiresAt: Date.now() + INJECTION_CACHE_TTL_MS })
+  }
+  return result
+}
+
+async function _injectUserTokensToMCP(
   userId: string,
   convexAuthToken: string
 ): Promise<TokenInjectionResult> {
@@ -181,46 +201,37 @@ async function injectTokensFromConvex(
     const now = Date.now();
     const timeUntilExpiry = tokens.expiresAt - now;
 
-    // If expired, try to refresh
-    if (timeUntilExpiry <= 0) {
-      try {
-        await convex.action(api.googleCalendar.refreshAccessToken, {
-          refreshToken: decryptToken(tokens.refreshToken),
-        });
-        // Fetch refreshed tokens
-        const refreshedTokens = await convex.query(api.googleCalendar.getTokens, {});
-
-        if (!refreshedTokens) {
-          return {
-            success: false,
-            message: 'Failed to refresh expired tokens. Please reconnect Google Calendar.',
-          };
-        }
-
-        // Use refreshed tokens
-        return await sendTokensToMCP(userId, refreshedTokens, mcpConfig);
-      } catch (refreshError) {
-        return {
-          success: false,
-          message: 'Tokens expired and refresh failed. Please reconnect Google Calendar.',
-        };
-      }
-    }
-
-    // If expiring soon (within 5 minutes), refresh proactively
+    // If expired or expiring soon (within 5 minutes), refresh
     if (timeUntilExpiry < 5 * 60 * 1000) {
       try {
-        await convex.action(api.googleCalendar.refreshAccessToken, {
-          refreshToken: decryptToken(tokens.refreshToken),
-        });
-        const refreshedTokens = await convex.query(api.googleCalendar.getTokens, {});
+        const refreshed = await convex.action(
+          api.googleCalendar.refreshAccessToken,
+          { refreshToken: decryptToken(tokens.refreshToken) }
+        );
 
-        if (refreshedTokens) {
-          return await sendTokensToMCP(userId, refreshedTokens, mcpConfig);
-        }
+        // Persist refreshed tokens back to DB (base64-encoded)
+        const encoded = {
+          accessToken: Buffer.from(refreshed.accessToken).toString('base64'),
+          refreshToken: Buffer.from(refreshed.refreshToken).toString('base64'),
+          expiresAt: refreshed.expiresAt,
+          scope: refreshed.scope,
+          tokenType: refreshed.tokenType,
+        };
+        await convex.mutation(
+          api.googleCalendar.updateAccessToken,
+          encoded
+        );
+
+        // Send plain-text tokens directly to MCP (skip re-query)
+        return await sendPlainTokensToMCP(userId, refreshed, mcpConfig);
       } catch (refreshError) {
+        if (timeUntilExpiry <= 0) {
+          return {
+            success: false,
+            message: 'Tokens expired and refresh failed. Please reconnect Google Calendar.',
+          };
+        }
         console.warn('Proactive token refresh failed, using existing tokens:', refreshError);
-        // Continue with existing tokens if proactive refresh fails
       }
     }
 
@@ -237,7 +248,46 @@ async function injectTokensFromConvex(
 }
 
 /**
- * Send tokens to MCP server
+ * Send plain-text (already decrypted) tokens to MCP server
+ */
+async function sendPlainTokensToMCP(
+  userId: string,
+  tokens: { accessToken: string; refreshToken: string; expiresAt: number; scope: string; tokenType: string },
+  mcpConfig: MCPServerConfig
+): Promise<TokenInjectionResult> {
+  const response = await fetch(`${mcpConfig.url}/api/tokens`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Origin': process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000',
+      'X-API-Key': mcpConfig.apiKey,
+    },
+    body: JSON.stringify({
+      userId,
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+      expiresAt: tokens.expiresAt,
+      scope: tokens.scope,
+      tokenType: tokens.tokenType || 'Bearer',
+    }),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.message || `HTTP ${response.status}: ${response.statusText}`);
+  }
+
+  const result = await response.json();
+  return {
+    success: true,
+    message: result.message || 'Tokens injected successfully (refreshed)',
+    expiresIn: result.expiresIn,
+    warning: result.warning,
+  };
+}
+
+/**
+ * Send base64-encoded tokens to MCP server (decrypts first)
  */
 async function sendTokensToMCP(
   userId: string,

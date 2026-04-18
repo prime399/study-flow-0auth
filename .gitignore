@@ -49,3 +49,5 @@ convex/testHelpers.ts
 
 /docs/
 scripts/generate-encryption-key.js
+
+google-calendar-mcp/

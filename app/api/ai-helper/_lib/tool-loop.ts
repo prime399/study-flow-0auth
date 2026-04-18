@@ -187,9 +187,11 @@ export async function runToolLoop(
     )
 
     // Append assistant message with tool_calls
+    // Heroku/Claude API requires non-empty, non-whitespace content even when tool_calls are present
+    const assistantContent = choice.message.content || '.'
     conversationMessages.push({
       role: 'assistant',
-      content: choice.message.content || null,
+      content: assistantContent,
       tool_calls: toolCalls,
     } as Message)
 
@@ -203,15 +205,28 @@ export async function runToolLoop(
         error: 'No result returned',
       }
 
-      const content = result.success
-        ? JSON.stringify(result.result)
-        : `Error: ${result.error}`
+      let toolContent: string
+      if (result.success) {
+        const serialized = JSON.stringify(result.result)
+        toolContent = typeof serialized === 'string' ? serialized : '{}'
+      } else {
+        toolContent = `Error: ${result.error}`
+      }
 
       conversationMessages.push({
         role: 'tool',
         tool_call_id: tc.id,
-        content,
+        content: toolContent,
       } as Message)
+    }
+
+    // Validate no undefined/null content before next API call
+    // Heroku/Claude API rejects null and '' — use a space as fallback
+    for (let i = 0; i < conversationMessages.length; i++) {
+      const msg = conversationMessages[i] as unknown as Record<string, unknown>
+      if (!msg.content) {
+        msg.content = '.'
+      }
     }
   }
 
