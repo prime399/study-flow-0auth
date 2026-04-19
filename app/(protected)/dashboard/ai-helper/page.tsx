@@ -25,6 +25,7 @@ export default function AIHelperPage() {
     input,
     setInput,
     isLoading,
+    isStreaming,
     error,
     messagesEndRef,
     selectedModel,
@@ -93,7 +94,7 @@ export default function AIHelperPage() {
                   messages={messages}
                   user={user}
                   error={error}
-                  isLoading={isLoading}
+                  isLoading={isLoading && !isStreaming}
                   onRetry={reload}
                   onClearError={clearError}
                 />

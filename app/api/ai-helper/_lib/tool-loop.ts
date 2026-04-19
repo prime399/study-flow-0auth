@@ -120,6 +120,7 @@ async function executeToolCalls(
 
 export interface ToolLoopConfig {
   maxIterations?: number
+  stream?: boolean
 }
 
 export async function runToolLoop(
@@ -238,4 +239,239 @@ export async function runToolLoop(
   })
 
   return finalCompletion
+}
+
+export interface StreamCallbacks {
+  onToken: (token: string) => void
+  onToolCall?: (toolName: string) => void
+}
+
+export async function runToolLoopStreaming(
+  config: OpenAIConfig,
+  messages: Message[],
+  mcpTools: McpTool[],
+  callbacks: StreamCallbacks,
+  loopConfig?: ToolLoopConfig
+): Promise<{ toolInvocations: { toolName: string; toolCallId: string }[] }> {
+  const client = createOpenAIClient(config)
+  const { tools: openaiTools, nameMap } = mcpToolsToOpenAITools(mcpTools)
+  const maxIter = loopConfig?.maxIterations ?? MAX_ITERATIONS
+  const conversationMessages: Message[] = [...messages]
+  const allToolInvocations: { toolName: string; toolCallId: string }[] = []
+
+  for (let iteration = 0; iteration < maxIter; iteration++) {
+    const options: ChatCompletionOptions = {
+      model: config.herokuModelId,
+      messages: conversationMessages,
+      ...getDefaultCompletionOptions(config.herokuModelId),
+      tools: openaiTools.length > 0 ? openaiTools : undefined,
+    }
+
+    if (iteration === maxIter - 1) {
+      delete options.tools
+      delete options.tool_choice
+    }
+
+    const isLastChance = iteration === maxIter - 1 || !options.tools
+
+    // For the potential final response, use streaming
+    if (isLastChance || iteration > 0) {
+      try {
+        const stream = await client.chat.completions.create({
+          ...options,
+          stream: true,
+        })
+
+        let aggregatedContent = ''
+        let hasToolCalls = false
+        const toolCalls: OpenAI.Chat.Completions.ChatCompletionMessageToolCall[] = []
+
+        for await (const chunk of stream) {
+          const choice = chunk.choices?.[0]
+          if (!choice) continue
+
+          if (choice.delta?.content) {
+            callbacks.onToken(choice.delta.content)
+            aggregatedContent += choice.delta.content
+          }
+
+          if (choice.delta?.tool_calls) {
+            hasToolCalls = true
+            for (const tcDelta of choice.delta.tool_calls) {
+              const idx = tcDelta.index ?? 0
+              if (!toolCalls[idx]) {
+                toolCalls[idx] = {
+                  id: tcDelta.id ?? `tool-${idx}`,
+                  type: 'function',
+                  function: { name: '', arguments: '' },
+                }
+              }
+              if (tcDelta.id) toolCalls[idx].id = tcDelta.id
+              const ftc = toolCalls[idx] as FunctionToolCall
+              if (tcDelta.function?.name) {
+                ftc.function.name += tcDelta.function.name
+              }
+              if (tcDelta.function?.arguments) {
+                ftc.function.arguments += tcDelta.function.arguments
+              }
+            }
+          }
+        }
+
+        if (!hasToolCalls) {
+          return { toolInvocations: allToolInvocations }
+        }
+
+        // Process tool calls
+        console.log(
+          `[ToolLoop/Stream] Iteration ${iteration + 1}: ${toolCalls.length} tool call(s)`
+        )
+
+        for (const tc of toolCalls) {
+          const ftc = tc as FunctionToolCall
+          const { toolName } = parseToolCallId(ftc.function.name, nameMap)
+          allToolInvocations.push({ toolName, toolCallId: ftc.id })
+          callbacks.onToolCall?.(toolName)
+        }
+
+        conversationMessages.push({
+          role: 'assistant',
+          content: aggregatedContent || '.',
+          tool_calls: toolCalls,
+        } as Message)
+
+        const results = await executeToolCalls(toolCalls, nameMap)
+
+        for (const tc of toolCalls) {
+          const result = results.get(tc.id) ?? {
+            success: false,
+            error: 'No result returned',
+          }
+          const toolContent = result.success
+            ? JSON.stringify(result.result) || '{}'
+            : `Error: ${result.error}`
+
+          conversationMessages.push({
+            role: 'tool',
+            tool_call_id: tc.id,
+            content: toolContent,
+          } as Message)
+        }
+
+        for (let i = 0; i < conversationMessages.length; i++) {
+          const msg = conversationMessages[i] as unknown as Record<string, unknown>
+          if (!msg.content) msg.content = '.'
+        }
+
+        continue
+      } catch (error) {
+        if (
+          iteration === 0 &&
+          options.tools &&
+          error instanceof Error &&
+          'status' in error &&
+          (error as { status: number }).status === 400
+        ) {
+          console.warn(
+            `[ToolLoop/Stream] Model ${config.herokuModelId} rejected tools, falling back`
+          )
+          delete options.tools
+          delete options.tool_choice
+          const fallbackStream = await client.chat.completions.create({
+            ...options,
+            stream: true,
+          })
+          for await (const chunk of fallbackStream) {
+            const delta = chunk.choices?.[0]?.delta?.content
+            if (delta) callbacks.onToken(delta)
+          }
+          return { toolInvocations: allToolInvocations }
+        }
+        throw error
+      }
+    }
+
+    // First iteration without streaming (tool calls expected)
+    let completion: OpenAI.Chat.Completions.ChatCompletion
+    try {
+      completion = await fetchChatCompletion(client, options)
+    } catch (error) {
+      if (
+        iteration === 0 &&
+        options.tools &&
+        error instanceof Error &&
+        'status' in error &&
+        (error as { status: number }).status === 400
+      ) {
+        delete options.tools
+        delete options.tool_choice
+        const fallbackStream = await client.chat.completions.create({
+          ...options,
+          stream: true,
+        })
+        for await (const chunk of fallbackStream) {
+          const delta = chunk.choices?.[0]?.delta?.content
+          if (delta) callbacks.onToken(delta)
+        }
+        return { toolInvocations: allToolInvocations }
+      }
+      throw error
+    }
+
+    const choice = completion.choices[0]
+    if (!choice) return { toolInvocations: allToolInvocations }
+
+    const completionToolCalls = choice.message.tool_calls
+    if (!completionToolCalls || completionToolCalls.length === 0) {
+      // Stream the text content token by token (simulate streaming for non-streamed response)
+      const content = choice.message.content || ''
+      const words = content.split(/(\s+)/)
+      for (const word of words) {
+        callbacks.onToken(word)
+      }
+      return { toolInvocations: allToolInvocations }
+    }
+
+    console.log(
+      `[ToolLoop/Stream] Iteration ${iteration + 1}: ${completionToolCalls.length} tool call(s)`
+    )
+
+    for (const tc of completionToolCalls) {
+      const ftc = tc as FunctionToolCall
+      const { toolName } = parseToolCallId(ftc.function.name, nameMap)
+      allToolInvocations.push({ toolName, toolCallId: ftc.id })
+      callbacks.onToolCall?.(toolName)
+    }
+
+    conversationMessages.push({
+      role: 'assistant',
+      content: choice.message.content || '.',
+      tool_calls: completionToolCalls,
+    } as Message)
+
+    const results = await executeToolCalls(completionToolCalls, nameMap)
+
+    for (const tc of completionToolCalls) {
+      const result = results.get(tc.id) ?? {
+        success: false,
+        error: 'No result returned',
+      }
+      const toolContent = result.success
+        ? JSON.stringify(result.result) || '{}'
+        : `Error: ${result.error}`
+
+      conversationMessages.push({
+        role: 'tool',
+        tool_call_id: tc.id,
+        content: toolContent,
+      } as Message)
+    }
+
+    for (let i = 0; i < conversationMessages.length; i++) {
+      const msg = conversationMessages[i] as unknown as Record<string, unknown>
+      if (!msg.content) msg.content = '.'
+    }
+  }
+
+  return { toolInvocations: allToolInvocations }
 }

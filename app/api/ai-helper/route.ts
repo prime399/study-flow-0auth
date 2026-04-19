@@ -20,7 +20,7 @@ import { isTokenVaultError, formatTokenVaultError } from "@/lib/auth0-token-vaul
 import type { McpTool } from "./_lib/mcp-types"
 import { isCalendarTool } from "./_lib/mcp-types"
 import { configureCalendarExecutor, configureHerokuExecutor } from "./_lib/tool-executors"
-import { runToolLoop } from "./_lib/tool-loop"
+import { runToolLoop, runToolLoopStreaming } from "./_lib/tool-loop"
 
 async function fetchAvailableMcpTools(requestUrl?: string): Promise<McpTool[]> {
   try {
@@ -266,6 +266,90 @@ ${toolsList}`
       ...sanitizeMessages(messages),
     ]
 
+    // Check if client wants streaming
+    const wantsStream = req.headers.get('accept')?.includes('text/event-stream')
+
+    if (wantsStream) {
+      // SSE streaming response
+      const encoder = new TextEncoder()
+      const stream = new ReadableStream({
+        async start(controller) {
+          const send = (event: string, data: unknown) => {
+            controller.enqueue(
+              encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+            )
+          }
+
+          try {
+            // Send metadata first
+            send('metadata', {
+              selectedModel: routingDecision.resolvedModelId,
+              isBYOK: isBYOKConfig(aiConfig),
+              provider: isBYOKConfig(aiConfig) ? aiConfig.provider : 'platform',
+            })
+
+            let toolInvocations: { toolName: string; toolCallId: string }[] = []
+
+            if (availableMcpTools.length > 0) {
+              const result = await runToolLoopStreaming(
+                config,
+                chatMessages,
+                availableMcpTools,
+                {
+                  onToken: (token) => send('token', { token }),
+                  onToolCall: (toolName) => send('tool_call', { toolName }),
+                }
+              )
+              toolInvocations = result.toolInvocations
+            } else {
+              // Stream directly without tool loop
+              const client = createOpenAIClient(config)
+              const streamResponse = await client.chat.completions.create({
+                model: config.herokuModelId,
+                messages: chatMessages,
+                ...getDefaultCompletionOptions(config.herokuModelId),
+                stream: true,
+              })
+
+              for await (const chunk of streamResponse) {
+                const delta = chunk.choices?.[0]?.delta?.content
+                if (delta) send('token', { token: delta })
+              }
+            }
+
+            if (toolInvocations.length > 0) {
+              send('tool_invocations', { toolInvocations })
+            }
+
+            // Record BYOK usage if applicable
+            if (isBYOKConfig(aiConfig) && convexAuthToken) {
+              await recordBYOKUsage(
+                convexAuthToken,
+                process.env.NEXT_PUBLIC_CONVEX_URL!,
+                aiConfig.provider
+              )
+            }
+
+            send('done', {})
+            controller.close()
+          } catch (err) {
+            const message = err instanceof Error ? err.message : 'Stream error'
+            send('error', { error: message })
+            controller.close()
+          }
+        },
+      })
+
+      return new Response(stream, {
+        headers: {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+        },
+      })
+    }
+
+    // Non-streaming fallback (existing behavior)
     let completion: OpenAI.Chat.Completions.ChatCompletion
 
     // Use tool loop with executor registry for MCP tools

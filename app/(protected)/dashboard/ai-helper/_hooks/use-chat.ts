@@ -49,6 +49,7 @@ export function useChat({ studyStats, groupInfo, userName }: UseChatProps) {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState("")
   const [isLoading, setIsLoading] = useState(false)
+  const [isStreaming, setIsStreaming] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [abortController, setAbortController] = useState<AbortController | null>(null)
   const [selectedModelState, setSelectedModelState] = useState<ModelPreference>(AUTO_MODEL_ID)
@@ -167,6 +168,7 @@ export function useChat({ studyStats, groupInfo, userName }: UseChatProps) {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          "Accept": "text/event-stream",
         },
         body: JSON.stringify({
           messages: [...messages, userMessage],
@@ -183,47 +185,145 @@ export function useChat({ studyStats, groupInfo, userName }: UseChatProps) {
         throw new Error(`HTTP error! status: ${response.status}`)
       }
 
-      const data = await response.json()
-      const toolInvocations = Array.isArray(data.toolInvocations)
-        ? data.toolInvocations
-        : []
+      const contentType = response.headers.get('content-type') || ''
 
-      if (typeof data.selectedModel === "string") {
-        setResolvedModel(data.selectedModel)
-      } else if (selectedModelState !== AUTO_MODEL_ID) {
-        setResolvedModel(selectedModelState)
-      }
+      if (contentType.includes('text/event-stream') && response.body) {
+        // Streaming SSE response
+        const assistantId = Math.random().toString(36).substring(2, 15)
+        let streamedContent = ''
+        let isBYOK = false
+        let provider = 'platform'
 
-      // Check if BYOK was used - if so, refund the coins
-      if (data.isBYOK === true && pendingCoinsRef.current > 0) {
-        try {
-          const refundResult = await refundCoins({
-            amount: pendingCoinsRef.current,
-            reason: "byok-refund"
-          })
-          setCoinBalance(refundResult.balance)
-          pendingCoinsRef.current = 0
-
-          toast.success("BYOK used - coins refunded!", {
-            description: `Using your ${data.provider} API key. No coins charged.`,
-          })
-        } catch (refundError) {
-          console.error("Failed to refund coins for BYOK:", refundError)
+        // Add empty assistant message that we'll update progressively
+        const placeholderMessage: Message = {
+          id: assistantId,
+          role: 'assistant',
+          content: '',
+          timestamp: Date.now(),
         }
-      } else {
-        // Platform keys used - coins were spent
-        pendingCoinsRef.current = 0
-      }
+        setMessages(prev => [...prev, placeholderMessage])
+        setIsStreaming(true)
 
-      let assistantContent = ""
-      if (data.choices && data.choices[0] && data.choices[0].message) {
-        assistantContent = data.choices[0].message.content
-      } else {
-        assistantContent = "I apologize, but I couldn't generate a proper response. Please try again."
-      }
+        const reader = response.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
 
-      const assistantMessage = createAssistantMessage(assistantContent, toolInvocations)
-      setMessages(prev => [...prev, assistantMessage])
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+
+          buffer += decoder.decode(value, { stream: true })
+          const lines = buffer.split('\n')
+          buffer = lines.pop() || ''
+
+          let currentEvent = ''
+          for (const line of lines) {
+            if (line.startsWith('event: ')) {
+              currentEvent = line.slice(7)
+            } else if (line.startsWith('data: ')) {
+              const data = JSON.parse(line.slice(6))
+
+              if (currentEvent === 'token') {
+                streamedContent += data.token
+                setMessages(prev =>
+                  prev.map(m =>
+                    m.id === assistantId
+                      ? { ...m, content: streamedContent }
+                      : m
+                  )
+                )
+              } else if (currentEvent === 'metadata') {
+                if (typeof data.selectedModel === 'string') {
+                  setResolvedModel(data.selectedModel)
+                }
+                isBYOK = data.isBYOK === true
+                provider = data.provider || 'platform'
+              } else if (currentEvent === 'tool_invocations') {
+                setMessages(prev =>
+                  prev.map(m =>
+                    m.id === assistantId
+                      ? { ...m, toolInvocations: data.toolInvocations }
+                      : m
+                  )
+                )
+              } else if (currentEvent === 'error') {
+                throw new Error(data.error)
+              }
+            }
+          }
+        }
+
+        // Handle BYOK refund
+        if (isBYOK && pendingCoinsRef.current > 0) {
+          try {
+            const refundResult = await refundCoins({
+              amount: pendingCoinsRef.current,
+              reason: "byok-refund"
+            })
+            setCoinBalance(refundResult.balance)
+            pendingCoinsRef.current = 0
+            toast.success("BYOK used - coins refunded!", {
+              description: `Using your ${provider} API key. No coins charged.`,
+            })
+          } catch (refundError) {
+            console.error("Failed to refund coins for BYOK:", refundError)
+          }
+        } else {
+          pendingCoinsRef.current = 0
+        }
+
+        // If no content was streamed, show fallback
+        if (!streamedContent) {
+          setMessages(prev =>
+            prev.map(m =>
+              m.id === assistantId
+                ? { ...m, content: "I apologize, but I couldn't generate a proper response. Please try again." }
+                : m
+            )
+          )
+        }
+        setIsStreaming(false)
+      } else {
+        // Non-streaming JSON fallback
+        const data = await response.json()
+        const toolInvocations = Array.isArray(data.toolInvocations)
+          ? data.toolInvocations
+          : []
+
+        if (typeof data.selectedModel === "string") {
+          setResolvedModel(data.selectedModel)
+        } else if (selectedModelState !== AUTO_MODEL_ID) {
+          setResolvedModel(selectedModelState)
+        }
+
+        if (data.isBYOK === true && pendingCoinsRef.current > 0) {
+          try {
+            const refundResult = await refundCoins({
+              amount: pendingCoinsRef.current,
+              reason: "byok-refund"
+            })
+            setCoinBalance(refundResult.balance)
+            pendingCoinsRef.current = 0
+            toast.success("BYOK used - coins refunded!", {
+              description: `Using your ${data.provider} API key. No coins charged.`,
+            })
+          } catch (refundError) {
+            console.error("Failed to refund coins for BYOK:", refundError)
+          }
+        } else {
+          pendingCoinsRef.current = 0
+        }
+
+        let assistantContent = ""
+        if (data.choices && data.choices[0] && data.choices[0].message) {
+          assistantContent = data.choices[0].message.content
+        } else {
+          assistantContent = "I apologize, but I couldn't generate a proper response. Please try again."
+        }
+
+        const assistantMessage = createAssistantMessage(assistantContent, toolInvocations)
+        setMessages(prev => [...prev, assistantMessage])
+      }
     } catch (err: any) {
       if (pendingCoinsRef.current > 0) {
         try {
@@ -252,6 +352,7 @@ export function useChat({ studyStats, groupInfo, userName }: UseChatProps) {
       }
     } finally {
       setIsLoading(false)
+      setIsStreaming(false)
       setAbortController(null)
     }
   }, [coinBalance, groupInfo, isLoading, messages, refundCoins, selectedModelState, selectedMcpToolState, spendCoins, studyStats, userName])
@@ -270,6 +371,7 @@ export function useChat({ studyStats, groupInfo, userName }: UseChatProps) {
       abortController.abort()
       setAbortController(null)
       setIsLoading(false)
+      setIsStreaming(false)
       toast.info("Request stopped")
     }
   }, [abortController])
@@ -312,6 +414,7 @@ export function useChat({ studyStats, groupInfo, userName }: UseChatProps) {
     input,
     setInput,
     isLoading,
+    isStreaming,
     error,
     messagesEndRef,
     selectedModel: selectedModelState,
