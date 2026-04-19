@@ -163,7 +163,7 @@ export async function getSpotifyAccessTokenDirect(
 export async function searchSpotifyPlaylistsDirect(
   accessToken: string,
   query: string = "lofi study",
-  limit: number = 20
+  limit: number = 10
 ): Promise<any[]> {
   try {
     const response = await fetch(

@@ -53,7 +53,7 @@ interface SpotifyPlaylist {
   name: string
   description: string
   images: Array<{ url: string }>
-  tracks: { total: number }
+  items?: { total: number }
   uri: string
 }
 
@@ -595,7 +595,7 @@ export default function SpotifySettingsPage() {
                           <div className="flex-1 min-w-0">
                             <p className="font-medium text-sm truncate">{playlist.name}</p>
                             <p className="text-xs text-muted-foreground">
-                              {playlist.tracks.total} tracks
+                              {playlist.items?.total ?? 0} tracks
                             </p>
                           </div>
                           {selectedPlaylist?.id === playlist.id && (
@@ -718,7 +718,7 @@ export default function SpotifySettingsPage() {
                             <div className="flex-1 min-w-0">
                               <p className="font-medium text-sm truncate">{playlist.name}</p>
                               <p className="text-xs text-muted-foreground line-clamp-1">
-                                {playlist.description || `${playlist.tracks.total} tracks`}
+                                {playlist.description || `${playlist.items?.total ?? 0} tracks`}
                               </p>
                             </div>
                             {selectedPlaylist?.id === playlist.id && (

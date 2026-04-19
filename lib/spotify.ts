@@ -5,7 +5,7 @@ export interface SpotifyPlaylist {
   name: string;
   description: string;
   images: Array<{ url: string }>;
-  tracks: { total: number };
+  items?: { total: number };
   uri: string;
   external_urls: { spotify: string };
 }
@@ -42,7 +42,7 @@ export async function getSpotifyAccessToken(): Promise<string> {
 export async function searchSpotifyPlaylists(
   accessToken: string,
   query: string = 'lofi study',
-  limit: number = 20
+  limit: number = 10
 ): Promise<SpotifyPlaylist[]> {
   try {
     const response = await fetch(
@@ -98,7 +98,7 @@ export async function getPlaylistTracks(
 ): Promise<SpotifyTrack[]> {
   try {
     const response = await fetch(
-      `https://api.spotify.com/v1/playlists/${playlistId}/tracks`,
+      `https://api.spotify.com/v1/playlists/${playlistId}/items`,
       {
         headers: {
           Authorization: `Bearer ${accessToken}`,
@@ -111,7 +111,7 @@ export async function getPlaylistTracks(
     }
 
     const data = await response.json();
-    return data.items?.map((item: any) => item.track) || [];
+    return data.items?.map((item: any) => item.item ?? item.track) || [];
   } catch (error) {
     console.error('Error getting playlist tracks:', error);
     throw error;
