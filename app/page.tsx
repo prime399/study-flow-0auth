@@ -271,7 +271,7 @@ export default function Home() {
                 asChild
               >
                 <Link
-                  href={"http://github.com/prime399/study-flow/"}
+                  href={"http://github.com/prime399/study-flow-0auth"}
                   target="_blank"
                 >
                   <Github className="h-3 w-3 sm:h-4 sm:w-4" />

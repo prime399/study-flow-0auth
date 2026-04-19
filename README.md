@@ -1,8 +1,8 @@
 # StudyFlow AI 🎓
 
-> Enterprise-grade study management platform powered by Heroku Managed Inference and Model Context Protocol (MCP)
+> Enterprise-grade study management platform powered by Heroku Managed Inference, Model Context Protocol (MCP), and Auth0 hybrid authentication
 
-StudyFlow AI is a comprehensive learning platform that combines advanced AI capabilities with real-time analytics to help students optimize their study habits. Built on Heroku's Managed Inference infrastructure with MCP tool integration, it features MentorMind - an intelligent AI assistant capable of processing external resources and providing context-aware study guidance.
+StudyFlow AI is a comprehensive learning platform that combines advanced AI capabilities with real-time analytics to help students optimize their study habits. Built on Heroku's Managed Inference infrastructure with MCP tool integration, it features MentorMind - an intelligent AI assistant capable of processing external resources and providing context-aware study guidance. Google Calendar and Spotify are connected via Auth0 machine-to-machine token injection, giving MentorMind seamless access to your schedule and music without separate OAuth flows.
 
 ## ✨ Key Features
 
@@ -13,7 +13,8 @@ StudyFlow AI is a comprehensive learning platform that combines advanced AI capa
 - **👥 Study Groups** - Collaborative workspaces with real-time messaging and leaderboards
 - **✅ Task Management** - Kanban-style todo board with drag-and-drop, priorities, and status tracking
 - **🏆 Competitive Features** - Global and group-specific leaderboards to encourage engagement
-- **📅 Calendar Integration** - Study session scheduling and planning tools
+- **📅 Google Calendar Integration** - Study sessions auto-synced to Google Calendar via Auth0 M2M token injection
+- **🎵 Spotify Integration** - Background music during study sessions, connected via Auth0 OAuth
 
 ### AI Capabilities (MentorMind)
 - **Multi-Model Architecture** - Dynamic routing between GPT-OSS 120B, Nova Lite/Pro, and Claude 4.5 Sonnet
@@ -103,11 +104,15 @@ VERCEL_ANALYTICS_ID=your-analytics-id
 # Initialize Convex
 npx convex dev
 
-# Set up authentication providers (optional)
+# Set up Convex Auth fallback providers (used if Auth0 is unavailable)
 npx convex env set AUTH_GITHUB_ID your-github-client-id
 npx convex env set AUTH_GITHUB_SECRET your-github-secret
 npx convex env set AUTH_GOOGLE_ID your-google-client-id
 npx convex env set AUTH_GOOGLE_SECRET your-google-secret
+
+# Auth0 domain for JWT verification
+npx convex env set AUTH0_DOMAIN your-tenant.auth0.com
+npx convex env set AUTH0_CLIENT_ID your-auth0-client-id
 ```
 
 ### 4. Run Development Server
@@ -163,7 +168,7 @@ StudyFlow/
 
 ### Backend Infrastructure
 - **Database**: Convex (serverless, real-time NoSQL)
-- **Authentication**: Convex Auth with OAuth providers (GitHub, Google)
+- **Authentication**: Hybrid Auth0 + Convex Auth (see below)
 - **API Layer**: Next.js API routes with TypeScript
 - **AI Integration**: Heroku Managed Inference with multi-model support
 - **MCP Tools**: Model Context Protocol for external resource access
@@ -257,6 +262,13 @@ data: [DONE]
    NEXT_PUBLIC_CONVEX_URL=https://your-deployment.convex.cloud
    HEROKU_INFERENCE_URL=https://api.heroku.com/ai
    HEROKU_INFERENCE_KEY_OSS=your-oss-key
+   # Auth0
+   AUTH0_SECRET=your-auth0-secret
+   AUTH0_BASE_URL=https://your-domain.com
+   AUTH0_ISSUER_BASE_URL=https://your-tenant.auth0.com
+   AUTH0_CLIENT_ID=your-auth0-client-id
+   AUTH0_CLIENT_SECRET=your-auth0-client-secret
+   AUTH0_AUDIENCE=your-api-audience
    # ... other AI model keys
    ```
 3. **Deploy** - Vercel will automatically build and deploy
@@ -270,6 +282,8 @@ npx convex deploy
 # Set production environment variables
 npx convex env set AUTH_GITHUB_ID your-github-id --prod
 npx convex env set AUTH_GITHUB_SECRET your-github-secret --prod
+npx convex env set AUTH0_DOMAIN your-tenant.auth0.com --prod
+npx convex env set AUTH0_CLIENT_ID your-auth0-client-id --prod
 # ... repeat for other variables
 ```
 
@@ -360,7 +374,84 @@ curl -H "Authorization: Bearer YOUR_KEY" \
 # Should return JSON array of available servers and tools
 ```
 
+### Authentication Architecture
+
+StudyFlow uses a **hybrid Auth0 + Convex Auth** model that combines the strengths of both systems.
+
+#### How It Works
+
+```
+User Login
+    │
+    ├── Auth0 (primary)
+    │     ├── Google OAuth  ──→ Google Calendar tokens injected via M2M
+    │     ├── GitHub OAuth
+    │     └── Session + refresh token management
+    │
+    └── Convex Auth (fallback)
+          ├── Activates if Auth0 session is unavailable
+          ├── GitHub + Google OAuth (direct)
+          └── Manages Convex user identity & real-time subscriptions
+```
+
+**Auth0 (primary layer)**
+- Handles login, session cookies, and token refresh automatically
+- Google and Spotify connections request the necessary OAuth scopes at login time — no separate OAuth flow needed
+- Google Calendar tokens (`access_token`, `refresh_token`) are passed to MentorMind via Auth0 machine-to-machine (M2M) token injection, using a post-login Action that embeds upstream Google tokens as custom claims
+- Spotify tokens follow the same pattern — Auth0 acts as the broker, and the app reads tokens from the session claims
+- Fine-grained calendar permissions (read/create/modify/delete) are stored in Convex and enforced at the API level
+
+**Convex Auth (fallback layer)**
+- If the Auth0 session is missing or expired and cannot be refreshed, Convex Auth takes over
+- Convex Auth maintains its own GitHub/Google OAuth flow and issues its own session tokens
+- All Convex backend functions (`getAuthUserId`) continue to work regardless of which layer authenticated the user
+- This ensures zero downtime: users stay logged in even during Auth0 outages
+
+**Machine-to-Machine token flow (Google Calendar & Spotify)**
+
+```
+Auth0 Post-Login Action
+    │
+    ├── Reads upstream Google/Spotify access + refresh tokens
+    │   from event.user.identities
+    │
+    └── Embeds as custom claims in the Auth0 ID token
+              │
+              ▼
+    MentorMind AI Helper (/api/ai-helper)
+              │
+              ├── Reads tokens from Auth0 session claims
+              ├── Injects into calendar-executor via injectUserTokensToMCP()
+              └── Stores/refreshes in Convex googleCalendarTokens table
+```
+
+This means users connect Google Calendar and Spotify once at login — no separate "Connect Google Calendar" OAuth popup is needed.
+
+#### Required Auth0 Configuration
+
+1. **Google Social Connection** — enable with your `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`, add scopes:
+   - `https://www.googleapis.com/auth/calendar.readonly`
+   - `https://www.googleapis.com/auth/calendar.events`
+2. **Spotify Social Connection** — enable with your Spotify app credentials
+3. **Auth0 API** — create with an audience (e.g. `https://studyflow.api`), enable "Allow Offline Access"
+4. **Post-Login Action** — embeds upstream Google/Spotify tokens as custom ID token claims
+5. **Refresh Token Rotation** — enable under Security settings
+
+#### Environment Variables (Auth0)
+
+```bash
+AUTH0_SECRET=<random 32+ char string>
+AUTH0_BASE_URL=http://localhost:3000
+AUTH0_ISSUER_BASE_URL=https://<your-tenant>.auth0.com
+AUTH0_CLIENT_ID=<from Auth0 dashboard>
+AUTH0_CLIENT_SECRET=<from Auth0 dashboard>
+AUTH0_AUDIENCE=<your API identifier>
+AUTH0_SCOPE="openid profile email offline_access"
+```
+
 ### Authentication Providers
+
+> **Note**: GitHub and Google OAuth are configured in Auth0 as social connections. The Convex env vars below are for the Convex Auth fallback layer only.
 
 #### GitHub OAuth Setup
 
@@ -369,9 +460,10 @@ curl -H "Authorization: Bearer YOUR_KEY" \
 3. Fill in application details:
    - **Application name**: StudyFlow AI
    - **Homepage URL**: `https://your-domain.com`
-   - **Authorization callback URL**: `https://your-deployment.convex.site/api/auth/callback/github`
+   - **Authorization callback URL**: `https://<your-tenant>.auth0.com/login/callback`
 4. Copy Client ID and Client Secret
-5. Add to Convex environment:
+5. Add to Auth0: Dashboard → Authentication → Social → GitHub
+6. Also add to Convex for fallback:
    ```bash
    npx convex env set AUTH_GITHUB_ID your-client-id
    npx convex env set AUTH_GITHUB_SECRET your-client-secret
@@ -382,12 +474,16 @@ curl -H "Authorization: Bearer YOUR_KEY" \
 1. Go to [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
 2. Create a new project or select existing
 3. Navigate to "Credentials" → "Create Credentials" → "OAuth 2.0 Client ID"
-4. Configure OAuth consent screen if prompted
+4. Configure OAuth consent screen — add Google Calendar API scopes:
+   - `https://www.googleapis.com/auth/calendar.readonly`
+   - `https://www.googleapis.com/auth/calendar.events`
 5. Set application type to "Web application"
 6. Add authorized redirect URIs:
-   - `https://your-deployment.convex.site/api/auth/callback/google`
+   - `https://<your-tenant>.auth0.com/login/callback` (for Auth0)
+   - `https://your-deployment.convex.site/api/auth/callback/google` (for Convex fallback)
 7. Copy Client ID and Client Secret
-8. Add to Convex environment:
+8. Add to Auth0: Dashboard → Authentication → Social → Google
+9. Also add to Convex for fallback:
    ```bash
    npx convex env set AUTH_GOOGLE_ID your-client-id
    npx convex env set AUTH_GOOGLE_SECRET your-client-secret
@@ -514,19 +610,22 @@ node --version
 **Symptom**: Can't sign in with GitHub/Google
 
 **Checklist**:
-- [ ] OAuth app created in GitHub/Google
-- [ ] Callback URLs correctly configured
-- [ ] Environment variables set in Convex
+- [ ] Auth0 application created and configured
+- [ ] Google/GitHub social connections enabled in Auth0
+- [ ] Callback URLs set in Auth0 app: `https://your-domain.com/api/auth/callback`
+- [ ] All `AUTH0_*` environment variables set in `.env.local`
+- [ ] Auth0 API created with correct audience
 - [ ] Application is using HTTPS (required for OAuth)
 
 **Debugging**:
 ```bash
-# Check Convex auth configuration
-npx convex env list
+# Check Auth0 env vars are set
+grep AUTH0 .env.local
 
-# Should show:
-# AUTH_GITHUB_ID=...
-# AUTH_GITHUB_SECRET=...
+# Check Convex fallback auth vars
+npx convex env list | grep AUTH
+
+# Should show AUTH_GITHUB_ID, AUTH_GITHUB_SECRET, AUTH0_DOMAIN, AUTH0_CLIENT_ID
 ```
 
 #### Study Sessions Not Saving
@@ -607,6 +706,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 | Technology | Purpose |
 |------------|---------|
 | Convex | Real-time serverless database |
+| Auth0 | Primary auth — OAuth, session management, M2M token injection |
+| Convex Auth | Fallback auth — activates if Auth0 session is unavailable |
 | Heroku Managed Inference | Multi-model AI hosting |
 | Model Context Protocol (MCP) | External resource integration |
 | Vercel | Frontend hosting and deployment |
@@ -628,6 +729,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ### Documentation
 - **Convex**: [docs.convex.dev](https://docs.convex.dev)
+- **Auth0**: [auth0.com/docs](https://auth0.com/docs)
+- **Auth0 Actions**: [auth0.com/docs/customize/actions](https://auth0.com/docs/customize/actions)
 - **Heroku Inference**: [devcenter.heroku.com/articles/heroku-inference](https://devcenter.heroku.com)
 - **MCP Protocol**: [GitHub MCP Examples](https://github.com/heroku/mcp-server-examples)
 - **Next.js**: [nextjs.org/docs](https://nextjs.org/docs)
@@ -644,6 +747,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - **Heroku** for Managed Inference platform and MCP infrastructure
 - **Convex** for real-time database and backend services
+- **Auth0** for authentication, M2M token injection, and fine-grained authorization
 - **Vercel** for seamless frontend hosting
 - **Anthropic** for Claude models
 - **Open-source community** for various tools and libraries
